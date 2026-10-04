@@ -26,6 +26,7 @@ J.defaultProject = () => ({
   overrides: {},
   colors: { enabled: false },
   fonts: {},
+  bgImage: null,
 });
 
 /* the original (After Effects-implemented) sets, captured before any expression pack registers */
@@ -206,6 +207,8 @@ J.plan = (project, audio) => {
     hud: fx.hud === 'on' ? true : fx.hud === 'off' ? false : !!st.hud,
     keyBg: J.keyMode ? J.keyMode(project) : null,   // 'green' | 'black' | null — 合成用の背景
     lang: J.resolveLang ? J.resolveLang(project) : 'ja',   // 歌詞の言語 (auto → detected)
+    bgImage: project.bgImage || null,
+    overrides: project.overrides || {},
   };
   if (J.setLang) J.setLang(plan.lang);                     // chunking + measuring below use this language
   const beats = plan.beats;

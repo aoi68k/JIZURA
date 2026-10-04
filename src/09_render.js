@@ -7,6 +7,259 @@ const E = J.E;
 
 const mk = (w, h) => { const c = document.createElement('canvas'); c.width = Math.max(1, w | 0); c.height = Math.max(1, h | 0); return c; };
 
+J.bgImageCache = new Map();
+J.bgVideoCache = new Map();
+
+J.isMediaVideo = (cfg) => {
+  if (!cfg) return false;
+  if (cfg.isVideo) return true;
+  if (typeof cfg.data === 'string' && (cfg.data.startsWith('data:video/') || cfg.data.startsWith('blob:video/'))) return true;
+  if (cfg.name && /\.(mp4|webm|m4v|mov)$/i.test(cfg.name)) return true;
+  return false;
+};
+
+J.getBgMedia = (cfg) => {
+  if (!cfg || !cfg.data) return null;
+  if (J.isMediaVideo(cfg)) {
+    let vid = J.bgVideoCache.get(cfg.data);
+    if (!vid) {
+      vid = document.createElement('video');
+      vid.muted = true;
+      vid.playsInline = true;
+      vid.loop = true;
+      vid.preload = 'auto';
+      vid.onloadedmetadata = () => { if (J.ui) J.ui.need = true; };
+      vid.addEventListener('seeked', () => { if (J.ui && !J.ui.playing) J.ui.need = true; });
+      vid.src = cfg.data;
+      J.bgVideoCache.set(cfg.data, vid);
+    }
+    return (vid.videoWidth > 0 && vid.readyState >= 1) ? vid : null;
+  }
+  let img = J.bgImageCache.get(cfg.data);
+  if (!img) {
+    img = new Image();
+    img.onload = () => { if (J.ui) J.ui.need = true; };
+    img.src = cfg.data;
+    J.bgImageCache.set(cfg.data, img);
+  }
+  return (img.complete && img.naturalWidth > 0) ? img : null;
+};
+J.getBgImage = J.getBgMedia;
+
+J.getActiveBgInfo = (plan, t) => {
+  if (!plan) return null;
+  const cut = J.cutAt(plan, t);
+  const lineOv = (cut && cut.line >= 0 && plan.overrides && plan.overrides[cut.line]) || null;
+
+  let cfg = null;
+  let isLine = false;
+  if (lineOv && lineOv.bgImage) {
+    if (lineOv.bgImage.enabled === false) {
+      return null; // この行は明示的にベース背景色を表示
+    }
+    if (lineOv.bgImage.data) {
+      cfg = lineOv.bgImage;
+      isLine = true;
+    }
+  }
+  if (!cfg && plan.bgImage && plan.bgImage.data && plan.bgImage.enabled !== false) {
+    cfg = plan.bgImage;
+  }
+  if (!cfg || !cfg.data) return null;
+
+  let sStart = 0, sEnd = plan.duration;
+  if (isLine && cut) {
+    sStart = cut.start;
+    sEnd = cut.end;
+    if (cut.line >= 0 && plan.lines && plan.lines[cut.line]) {
+      sStart = plan.lines[cut.line].start;
+      sEnd = plan.lines[cut.line].end;
+    }
+  }
+  const el = J.getBgMedia(cfg) || J.bgImageElement;
+  const isVideo = J.isMediaVideo(cfg);
+  return { cfg, el, isVideo, span: { start: sStart, end: sEnd } };
+};
+
+J.syncBgVideos = (plan, t, isPlaying) => {
+  const info = J.getActiveBgInfo(plan, t);
+  const activeVid = (info && info.isVideo && info.el && info.el.tagName === 'VIDEO') ? info.el : null;
+
+  if (J.bgVideoCache) {
+    for (const vid of J.bgVideoCache.values()) {
+      if (vid !== activeVid && !vid.paused) {
+        try { vid.pause(); } catch (e) {}
+      }
+    }
+  }
+
+  if (!activeVid) return;
+
+  const sStart = (info.span && info.span.start != null) ? info.span.start : 0;
+  let targetT = Math.max(0, t - sStart);
+  if (activeVid.duration && activeVid.duration > 0) {
+    targetT = targetT % activeVid.duration;
+  }
+
+  if (isPlaying) {
+    if (activeVid.paused) {
+      activeVid.play().catch(() => {});
+    }
+    if (Math.abs(activeVid.currentTime - targetT) > 0.25) {
+      try { activeVid.currentTime = targetT; } catch (e) {}
+    }
+  } else {
+    if (!activeVid.paused) {
+      try { activeVid.pause(); } catch (e) {}
+    }
+    if (Math.abs(activeVid.currentTime - targetT) > 0.03) {
+      try { activeVid.currentTime = targetT; } catch (e) {}
+    }
+  }
+};
+
+J.prepareBgVideoForTime = async (plan, t) => {
+  const info = J.getActiveBgInfo(plan, t);
+  if (!info || !info.isVideo || !info.el || info.el.tagName !== 'VIDEO') return;
+  const vid = info.el;
+  if (!vid.paused) {
+    try { vid.pause(); } catch (e) {}
+  }
+  const sStart = (info.span && info.span.start != null) ? info.span.start : 0;
+  let targetT = Math.max(0, t - sStart);
+  if (vid.duration && vid.duration > 0) {
+    targetT = targetT % vid.duration;
+  }
+  if (Math.abs(vid.currentTime - targetT) > 0.008) {
+    await new Promise(resolve => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        vid.removeEventListener('seeked', finish);
+        resolve();
+      };
+      vid.addEventListener('seeked', finish);
+      try {
+        vid.currentTime = targetT;
+      } catch (e) {
+        finish();
+      }
+      setTimeout(finish, 60);
+    });
+  }
+};
+
+J.drawBgImage = (ctx, img, cfg, W, H, scale = 1, allowFilter = true, camMotion = null, span = null, t = 0) => {
+  if (!img || !cfg) return;
+  const iw = img.videoWidth || img.naturalWidth || img.width, ih = img.videoHeight || img.naturalHeight || img.height;
+  if (!iw || !ih) return;
+
+  let p = 0.5, dur = 3, tin = 1.5, tout = 1.5;
+  if (span) {
+    dur = Math.max(0.1, span.end - span.start);
+    tin = Math.max(0, t - span.start);
+    tout = Math.max(0, span.end - t);
+    p = J.clamp(tin / dur, 0, 1);
+  }
+  const transDur = Math.min(0.42, dur * 0.28);
+
+  // 1. ズーム倍率 (スパン全体を通して連続した1ショットとしてアニメーション)
+  const zm = cfg.zoom || 'none';
+  let zScale = 1.0;
+  if (zm === 'in') zScale = 1.06 + 0.18 * p;
+  else if (zm === 'out') zScale = 1.24 - 0.18 * p;
+  else if (zm === 'slow-in') zScale = 1.05 + 0.08 * p;
+  else if (zm === 'slow-out') zScale = 1.13 - 0.08 * p;
+
+  // 2. スライド移動 (スパン全体を通して一定速度で連続移動)
+  const sm = cfg.slide || 'none';
+  const VECS = {
+    up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0],
+    'up-left': [-0.71, -0.71], 'up-right': [0.71, -0.71],
+    'down-left': [-0.71, 0.71], 'down-right': [0.71, 0.71],
+  };
+  const v = VECS[sm] || [0, 0];
+  const slideDist = 0.065;
+  const panX = W * slideDist * v[0] * (p - 0.5);
+  const panY = H * slideDist * v[1] * (p - 0.5);
+  const slideMargin = sm !== 'none' ? 1.14 : 1.0;
+
+  // 3. フェード (スパンの開始と終了でフェード)
+  const fm = cfg.fade || 'none';
+  let fadeAlpha = 1.0;
+  const pIn = J.clamp(tin / transDur, 0, 1);
+  const pOut = J.clamp(tout / transDur, 0, 1);
+  if (fm === 'in') fadeAlpha = pIn;
+  else if (fm === 'out') fadeAlpha = pOut;
+  else if (fm === 'in-out') fadeAlpha = Math.min(pIn, pOut);
+
+  // 4. ブラー (スパンの開始と終了で合焦/ぼやけ)
+  const bm = cfg.blurMode || 'none';
+  let blurAnim = 0;
+  if (bm === 'in') blurAnim = 18 * (1 - pIn);
+  else if (bm === 'out') blurAnim = 18 * (1 - pOut);
+  else if (bm === 'in-out') blurAnim = 18 * Math.max(1 - pIn, 1 - pOut);
+
+  const anchor = cfg.anchor || 'center';
+  const ANCHORS = {
+    'top-left': [0, 0],
+    'top': [0.5, 0],
+    'top-right': [1, 0],
+    'left': [0, 0.5],
+    'center': [0.5, 0.5],
+    'right': [1, 0.5],
+    'bottom-left': [0, 1],
+    'bottom': [0.5, 1],
+    'bottom-right': [1, 1],
+  };
+  const [ax, ay] = ANCHORS[anchor] || [0.5, 0.5];
+
+  ctx.save();
+
+  const totalScale = Math.max(1.04, zScale) * slideMargin;
+  const pivotX = W * ax, pivotY = H * ay;
+  ctx.translate(pivotX + panX, pivotY + panY);
+  ctx.scale(totalScale, totalScale);
+
+  // 演出効果: 画面全体の振動（shake）や微細な揺れを反映（カット切り替えによる急激な位置リセットは防止）
+  if (cfg.effects && camMotion) {
+    ctx.translate(camMotion.shx || 0, camMotion.shy || 0);
+  }
+  ctx.translate(-pivotX, -pivotY);
+
+  const fit = cfg.fit || 'cover';
+  let dx = 0, dy = 0, dw = W, dh = H;
+  if (fit === 'cover') {
+    const s = Math.max(W / iw, H / ih);
+    dw = iw * s; dh = ih * s;
+    dx = (W - dw) * ax; dy = (H - dh) * ay;
+  } else if (fit === 'contain') {
+    const s = Math.min(W / iw, H / ih);
+    dw = iw * s; dh = ih * s;
+    dx = (W - dw) * ax; dy = (H - dh) * ay;
+  }
+
+  const baseOp = cfg.opacity != null ? Math.max(0, Math.min(1, +cfg.opacity)) : 1;
+  ctx.globalAlpha = baseOp * fadeAlpha;
+
+  const totalBlur = (cfg.blur || 0) + blurAnim;
+  if (totalBlur > 0.2 && allowFilter) {
+    ctx.filter = `blur(${(totalBlur * scale).toFixed(1)}px)`;
+  }
+  ctx.drawImage(img, dx, dy, dw, dh);
+  ctx.restore();
+
+  const dim = cfg.dim != null ? Math.max(0, Math.min(1, +cfg.dim)) : 0;
+  if (dim > 0) {
+    ctx.save();
+    ctx.fillStyle = '#000000';
+    ctx.globalAlpha = dim * fadeAlpha;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+};
+
 J.cutAt = (plan, t) => {
   const cs = plan.cuts; let lo = 0, hi = cs.length - 1, ans = -1;
   while (lo <= hi) { const m = (lo + hi) >> 1; if (cs[m].start <= t) { ans = m; lo = m + 1; } else hi = m - 1; }
@@ -72,24 +325,6 @@ class Renderer {
     ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; ctx.filter = 'none';
     ctx.clearRect(0, 0, cw, ch);
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
-    // ---------- background ----------
-    const key = plan.keyBg && J.KEY_BG && J.KEY_BG[plan.keyBg] ? plan.keyBg : null;   // 合成用: white-on-black, finished in keyFinish()
-    if (key && !opt.transparent) { ctx.fillStyle = '#000000'; ctx.fillRect(0, 0, W, H); }
-    else if (!opt.transparent) {
-      ctx.fillStyle = sc.bg; ctx.fillRect(0, 0, W, H);
-      const g = ctx.createRadialGradient(W / 2, H * 0.45, 0, W / 2, H / 2, Math.hypot(W, H) * 0.6);
-      const lift = J.lum(sc.bg) < 0.5 ? 'rgba(255,255,255,0.045)' : 'rgba(255,255,255,0.10)';
-      g.addColorStop(0, lift); g.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-      const paperAmt = (sc.paper ? 1 : st.texture.paper || 0) * (fx.texture ?? 0.6);
-      if (paperAmt > 0.02) {
-        ctx.globalCompositeOperation = J.lum(sc.bg) < 0.4 ? 'screen' : 'multiply';
-        ctx.globalAlpha = J.lum(sc.bg) < 0.4 ? paperAmt * 0.06 : paperAmt * 0.85;
-        if (J.lum(sc.bg) < 0.4) ctx.filter = 'invert(1)';
-        ctx.drawImage(this.paper(W, H), 0, 0, W, H);
-        ctx.filter = 'none'; ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
-      }
-    }
     // ---------- camera & chroma amounts ----------
     const u = H / 1080;
     const events = plan.events;
@@ -108,9 +343,51 @@ class Renderer {
     const step = Math.floor(tq / clock + 1e-6);
     const beatInfo = plan.beats && plan.beats.length ? beatAt(plan.beats, tq) : null;
     const energy = plan.energy ? plan.energy[Math.min(plan.energy.length - 1, Math.max(0, Math.floor(t * plan.energyRate)))] : null;
+    const shx = J.rs(step, 71) * shake * 16 * u, shy = J.rs(step, 72) * shake * 11 * u;
+
+    let camMove = { x: 0, y: 0, s: 1, rot: 0, skx: 0, sx: 1, sy: 1, shx, shy };
+    if (mainCut) {
+      const CD = J.CAMERA[mainCut.cam] || J.CAMERA.push;
+      try {
+        const envCam = this.makeEnv(ctx, plan, mainCut, sc, { pass: 'main', t: tq, lt: tq - mainCut.start, ltb: tq - mainCut.start, step, scale, allowFilter, energy, beat: beatInfo });
+        const c0 = CD.get(envCam, mainCut.camP || {});
+        if (c0) Object.assign(camMove, c0);
+      } catch (e) {}
+    }
+
+    // ---------- active background media (line priority > project base) ----------
+    const bgInfo = J.getActiveBgInfo(plan, tq);
+    const activeBgCfg = bgInfo ? bgInfo.cfg : null;
+    const activeBgImg = bgInfo ? (bgInfo.el || J.bgImageElement) : null;
+    const bgSpan = bgInfo ? bgInfo.span : null;
+
+    // ---------- background ----------
+    const key = plan.keyBg && J.KEY_BG && J.KEY_BG[plan.keyBg] ? plan.keyBg : null;   // 合成用: white-on-black, finished in keyFinish()
+    if (key && !opt.transparent) { ctx.fillStyle = '#000000'; ctx.fillRect(0, 0, W, H); }
+    else if (!opt.transparent) {
+      ctx.fillStyle = sc.bg; ctx.fillRect(0, 0, W, H);
+      if (activeBgImg && activeBgCfg) {
+        J.drawBgImage(ctx, activeBgImg, activeBgCfg, W, H, scale, allowFilter, camMove, bgSpan, tq);
+      }
+      const g = ctx.createRadialGradient(W / 2, H * 0.45, 0, W / 2, H / 2, Math.hypot(W, H) * 0.6);
+      const lift = J.lum(sc.bg) < 0.5 ? 'rgba(255,255,255,0.045)' : 'rgba(255,255,255,0.10)';
+      g.addColorStop(0, lift); g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      const paperAmt = (sc.paper ? 1 : st.texture.paper || 0) * (fx.texture ?? 0.6);
+      if (paperAmt > 0.02) {
+        ctx.globalCompositeOperation = J.lum(sc.bg) < 0.4 ? 'screen' : 'multiply';
+        ctx.globalAlpha = J.lum(sc.bg) < 0.4 ? paperAmt * 0.06 : paperAmt * 0.85;
+        if (J.lum(sc.bg) < 0.4) ctx.filter = 'invert(1)';
+        ctx.drawImage(this.paper(W, H), 0, 0, W, H);
+        ctx.filter = 'none'; ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+      }
+    }
     // ---------- background graphic (per line) ----------
     // 透過PNG 前景／後景 (opt.layer): 'back' = background graphic + the decorations behind the lyrics, 'front' = the rest
     const layer = opt.transparent ? opt.layer || null : null;
+    if (layer === 'back' && !key && activeBgImg && activeBgCfg) {
+      J.drawBgImage(ctx, activeBgImg, activeBgCfg, W, H, scale, allowFilter, camMove, bgSpan, tq);
+    }
     if ((!opt.transparent || layer === 'back') && !key && mainCut && mainCut.bg && mainCut.bg !== 'none' && J.BG[mainCut.bg]) {
       const env = this.makeEnv(ctx, plan, mainCut, sc, { pass: 'main', t: tq, lt: tq - mainCut.start, ltb: tq - mainCut.start, step, scale, allowFilter, energy, beat: beatInfo, bgOnly: true });
       ctx.save();
@@ -118,7 +395,6 @@ class Renderer {
       ctx.restore();
       ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.filter = 'none';
     }
-    const shx = J.rs(step, 71) * shake * 16 * u, shy = J.rs(step, 72) * shake * 11 * u;
     // ---------- content passes ----------
     const passes = [
       { pass: 'B', lag: 1.6 / 24, off: [-3.4 * chroma * u, -1.3 * chroma * u] },

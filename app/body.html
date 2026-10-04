@@ -133,11 +133,191 @@
         </div>
       </div>
       <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="props" aria-selected="false">プロパティ</button>
         <button role="tab" data-tab="style" aria-selected="true">スタイル</button>
         <button role="tab" data-tab="fx" aria-selected="false">演出</button>
         <button role="tab" data-tab="tech" aria-selected="false">手法</button>
         <button role="tab" data-tab="out" aria-selected="false">書き出し</button>
       </nav>
+
+      <div class="tabpane" data-pane="props" hidden>
+        <div id="propsEmpty" class="props-empty" hidden>
+          <p class="hint">再生中・選択中の行がありません。<br>タイムラインをクリックするか、左の行リストから選択してください。</p>
+        </div>
+        <div id="propsContent">
+          <!-- 行ナビゲーション -->
+          <div class="props-header">
+            <div class="props-nav">
+              <button id="pPropPrev" class="ghost small">◀ 前の行</button>
+              <span id="pLineLabel" class="mono font-bold">行 1 / 1</span>
+              <button id="pPropNext" class="ghost small">次の行 ▶</button>
+            </div>
+            <div class="props-subnav">
+              <span id="pLineTime" class="mono muted">0:00.00 - 0:00.00</span>
+              <button id="pPropSeek" class="ghost small">▶ ジャンプ</button>
+            </div>
+          </div>
+
+          <!-- 歌詞テキスト表示 & アクション -->
+          <div class="props-sec">
+            <div id="pLineText" class="props-linetext"></div>
+            <div class="row" style="margin-top:6px;gap:6px">
+              <button id="pPropDice" class="ghost small">🎲 再抽選</button>
+              <button id="pPropLock" class="ghost small">🔒 固定する</button>
+              <label class="check" style="margin-left:auto;font-size:11px" title="この行を1カットにまとめます">
+                <input id="pPropSingle" type="checkbox"><span>1カット化</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- カット情報 -->
+          <div class="props-sec">
+            <div class="group-h" style="margin-top:0">
+              <h3>現在のカット</h3>
+              <span id="pCutBadge" class="chip mono">#01</span>
+            </div>
+            <div id="pCutChips" class="cutinfo" style="margin-top:4px"></div>
+          </div>
+
+          <!-- 演出の上書き（開閉可能・普段は閉じておく） -->
+          <details id="pTechDetails" class="props-details">
+            <summary>
+              <span>演出の指定</span>
+              <span id="pTechBadge" class="chip mono">自動</span>
+            </summary>
+            <div class="props-details-body">
+              <div class="fields">
+                <label class="field">レイアウト<select id="pLayout"></select></label>
+                <label class="field">登場 (Enter)<select id="pEnter"></select></label>
+              </div>
+              <div class="fields" style="margin-top:6px">
+                <label class="field">保持 (Hold)<select id="pHold"></select></label>
+                <label class="field">退場 (Exit)<select id="pExit"></select></label>
+              </div>
+              <div class="fields" style="margin-top:6px">
+                <label class="field">文字加工 (Treat)<select id="pTreat"></select></label>
+                <label class="field">カメラ (Cam)<select id="pCam"></select></label>
+              </div>
+              <div class="fields" style="margin-top:6px">
+                <label class="field">背景演出 (Bg)<select id="pBg"></select></label>
+                <label class="field">つなぎ (Trans)<select id="pTrans"></select></label>
+              </div>
+              <div class="row" style="margin-top:10px;justify-content:flex-end">
+                <button id="pTechReset" class="ghost small" title="この行の演出指定をすべて自動に戻します">すべて自動に戻す</button>
+              </div>
+            </div>
+          </details>
+
+          <!-- この行の背景画像 -->
+          <div class="props-sec">
+            <div class="group-h">
+              <h3>この行の背景（画像/動画）</h3>
+              <span id="pBgStatus" class="chip muted">未設定</span>
+            </div>
+            <div class="row" style="margin-top:4px">
+              <label class="file" style="flex:1">画像・動画を選択<input id="pBgFile" type="file" accept="image/*,video/mp4,video/webm,video/*,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm"></label>
+              <button id="pBgDel" class="ghost small" hidden>解除</button>
+            </div>
+            <div id="pBgSettings" hidden style="margin-top:8px">
+              <label class="check" style="margin-bottom:8px"><input id="pBgEnabled" type="checkbox" checked><span>この行に画像・動画を表示<small>OFFにすると、画像を残したままベース背景カラーを表示します</small></span></label>
+              <div class="fields">
+                <label class="field">配置
+                  <select id="pBgFit">
+                    <option value="cover">画面を覆う (cover)</option>
+                    <option value="contain">全体を収める (contain)</option>
+                    <option value="stretch">引き伸ばし (stretch)</option>
+                  </select>
+                </label>
+                <label class="field">基準位置 (アンカー)
+                  <select id="pBgAnchor">
+                    <option value="center">中央</option>
+                    <option value="top">上</option>
+                    <option value="bottom">下</option>
+                    <option value="left">左</option>
+                    <option value="right">右</option>
+                    <option value="top-left">左上</option>
+                    <option value="top-right">右上</option>
+                    <option value="bottom-left">左下</option>
+                    <option value="bottom-right">右下</option>
+                  </select>
+                </label>
+              </div>
+              <div class="pivot-selector">
+                <span class="field-title">アンカー位置（ピボット）</span>
+                <div class="pivot-grid" data-target="pBgAnchor">
+                  <button type="button" data-val="top-left" title="左上">↖</button>
+                  <button type="button" data-val="top" title="上">↑</button>
+                  <button type="button" data-val="top-right" title="右上">↗</button>
+                  <button type="button" data-val="left" title="左">←</button>
+                  <button type="button" data-val="center" title="中央" class="active">•</button>
+                  <button type="button" data-val="right" title="右">→</button>
+                  <button type="button" data-val="bottom-left" title="左下">↙</button>
+                  <button type="button" data-val="bottom" title="下">↓</button>
+                  <button type="button" data-val="bottom-right" title="右下">↘</button>
+                </div>
+              </div>
+              <div class="fields" style="margin-top:6px">
+                <label class="field">不透明度
+                  <input id="pBgOpacity" type="range" min="0" max="100" value="100">
+                </label>
+                <label class="field">暗さ(ディミング)
+                  <input id="pBgDim" type="range" min="0" max="100" value="25">
+                </label>
+              </div>
+              <div class="fields" style="margin-top:6px">
+                <label class="field">ぼかし(ブラー)
+                  <input id="pBgBlur" type="range" min="0" max="30" value="0">
+                </label>
+              </div>
+              <div class="fields" style="margin-top:6px">
+                <label class="field">ズーム
+                  <select id="pBgZoom">
+                    <option value="none">なし</option>
+                    <option value="in">ズームイン</option>
+                    <option value="out">ズームアウト</option>
+                    <option value="slow-in">ゆっくりイン</option>
+                    <option value="slow-out">ゆっくりアウト</option>
+                  </select>
+                </label>
+                <label class="field">スライド
+                  <select id="pBgSlide">
+                    <option value="none">なし</option>
+                    <option value="up">上へ</option>
+                    <option value="down">下へ</option>
+                    <option value="left">左へ</option>
+                    <option value="right">右へ</option>
+                    <option value="up-left">左上へ</option>
+                    <option value="up-right">右上へ</option>
+                    <option value="down-left">左下へ</option>
+                    <option value="down-right">右下へ</option>
+                  </select>
+                </label>
+              </div>
+              <div class="fields" style="margin-top:6px">
+                <label class="field">フェード
+                  <select id="pBgFade">
+                    <option value="none">なし</option>
+                    <option value="in">フェードイン</option>
+                    <option value="out">フェードアウト</option>
+                    <option value="both">イン &amp; アウト</option>
+                  </select>
+                </label>
+                <label class="field">ブラー変化
+                  <select id="pBgBlurMode">
+                    <option value="none">なし</option>
+                    <option value="in">合焦（ぼけ→鮮明）</option>
+                    <option value="out">ぼやける（鮮明→ぼけ）</option>
+                    <option value="both">イン &amp; アウト</option>
+                  </select>
+                </label>
+              </div>
+              <label class="check" style="margin-top:8px">
+                <input id="pBgEffects" type="checkbox"><span>背景にも画面効果（グリッチ・色ズレ等）を連動</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div class="tabpane" data-pane="style">
         <div id="styleGrid" class="style-grid"></div>
@@ -158,6 +338,84 @@
         <h3>背景・文字色</h3>
         <label class="check"><input id="colorOn" type="checkbox"><span>メインの背景と文字を自分の色にする</span></label>
         <div class="color-row" id="colorRow"></div>
+        <h3>背景（画像・動画）</h3>
+        <div class="row">
+          <label class="file" title="png / jpg / webp / mp4 / webm など">画像・動画を選択<input id="bgImageFile" type="file" accept="image/*,video/mp4,video/webm,video/*,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm"></label>
+          <button id="btnRemoveBgImage" class="ghost small" hidden>背景を解除</button>
+        </div>
+        <div id="bgImageControls" hidden style="margin-top:8px">
+          <label class="check" style="margin-bottom:8px"><input id="bgImageEnabled" type="checkbox" checked><span>画像・動画を背景に表示<small>OFFにすると、画像を残したままスタイルの背景カラーを表示します</small></span></label>
+          <div class="fields">
+            <label class="field">配置<select id="bgImageFit"><option value="cover">画面を覆う (cover)</option><option value="contain">全体を収める (contain)</option><option value="stretch">引き伸ばし (stretch)</option></select></label>
+            <label class="field">基準位置 (アンカー)<select id="bgImageAnchor">
+              <option value="center">中央</option>
+              <option value="top">上</option>
+              <option value="bottom">下</option>
+              <option value="left">左</option>
+              <option value="right">右</option>
+              <option value="top-left">左上</option>
+              <option value="top-right">右上</option>
+              <option value="bottom-left">左下</option>
+              <option value="bottom-right">右下</option>
+            </select></label>
+          </div>
+          <div class="pivot-selector">
+            <span class="field-title">アンカー位置（ピボット）</span>
+            <div class="pivot-grid" data-target="bgImageAnchor">
+              <button type="button" data-val="top-left" title="左上">↖</button>
+              <button type="button" data-val="top" title="上">↑</button>
+              <button type="button" data-val="top-right" title="右上">↗</button>
+              <button type="button" data-val="left" title="左">←</button>
+              <button type="button" data-val="center" title="中央" class="active">•</button>
+              <button type="button" data-val="right" title="右">→</button>
+              <button type="button" data-val="bottom-left" title="左下">↙</button>
+              <button type="button" data-val="bottom" title="下">↓</button>
+              <button type="button" data-val="bottom-right" title="右下">↘</button>
+            </div>
+          </div>
+          <div class="fields" style="margin-top:6px">
+            <label class="field">不透明度<input id="bgImageOpacity" type="range" min="0" max="100" value="100"></label>
+            <label class="field">暗さ(ディミング)<input id="bgImageDim" type="range" min="0" max="100" value="30"></label>
+          </div>
+          <div class="fields" style="margin-top:6px">
+            <label class="field">ぼかし(ブラー)<input id="bgImageBlur" type="range" min="0" max="30" value="0"></label>
+          </div>
+          <div class="fields" style="margin-top:6px">
+            <label class="field">ズーム<select id="bgImageZoom">
+              <option value="none">なし</option>
+              <option value="in">ズームイン</option>
+              <option value="out">ズームアウト</option>
+              <option value="slow-in">ゆっくりズームイン</option>
+              <option value="slow-out">ゆっくりズームアウト</option>
+            </select></label>
+            <label class="field">スライド<select id="bgImageSlide">
+              <option value="none">なし</option>
+              <option value="up">上へ</option>
+              <option value="down">下へ</option>
+              <option value="left">左へ</option>
+              <option value="right">右へ</option>
+              <option value="up-left">斜め左上</option>
+              <option value="up-right">斜め右上</option>
+              <option value="down-left">斜め左下</option>
+              <option value="down-right">斜め右下</option>
+            </select></label>
+          </div>
+          <div class="fields" style="margin-top:6px">
+            <label class="field">フェード<select id="bgImageFade">
+              <option value="none">なし</option>
+              <option value="in">フェードイン</option>
+              <option value="out">フェードアウト</option>
+              <option value="in-out">フェードイン・アウト</option>
+            </select></label>
+            <label class="field">ブラー演出<select id="bgImageBlurMode">
+              <option value="none">なし</option>
+              <option value="in">ブラーイン (ピント合焦)</option>
+              <option value="out">ブラーアウト (ぼやけ)</option>
+              <option value="in-out">ブラーイン・アウト</option>
+            </select></label>
+          </div>
+          <label class="check" style="margin-top:8px"><input id="bgImageEffects" type="checkbox"><span>演出の効果を受ける<small>カメラの動き（パン・ズーム・揺れ）に合わせて背景が動きます</small></span></label>
+        </div>
       </div>
 
       <div class="tabpane" data-pane="fx" hidden>

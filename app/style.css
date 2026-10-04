@@ -113,6 +113,7 @@ button.tap { font: 700 18px/1 var(--mono); letter-spacing: 0.2em; padding: 16px;
 .ln .cuts { display: flex; gap: 4px; flex-wrap: wrap; min-width: 0; }
 .ln .cuts span { font-size: 10px; padding: 1px 6px; border-radius: 2px; border: 1px solid var(--line2); color: var(--muted); cursor: pointer; }
 .ln .cuts span:hover { color: var(--text); border-color: var(--amber); }
+.ln .tools .icon.bg-btn.active { color: var(--amber); border-color: var(--amber); background: rgba(245,165,12,0.14); }
 
 /* ---------- stage ---------- */
 .col-stage { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; min-width: 0; }
@@ -141,10 +142,33 @@ button.play { width: 40px; height: 34px; padding: 0; font-size: 14px; }
 .hint { font-size: 12px; color: var(--muted); }
 
 /* ---------- right panel ---------- */
-.tabs { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 2; }
-.tabs button { border: 0; border-radius: 0; background: transparent; padding: 11px 4px; color: var(--muted); border-bottom: 2px solid transparent; }
+.tabs { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 2; }
+.tabs button { border: 0; border-radius: 0; background: transparent; padding: 10px 2px; color: var(--muted); border-bottom: 2px solid transparent; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tabs button[aria-selected=true] { color: var(--text); border-bottom-color: var(--amber); }
 .tabpane { padding: 14px 16px 24px; }
+
+/* ---------- properties panel ---------- */
+.props-empty { padding: 40px 10px; text-align: center; }
+.props-header { border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 12px; }
+.props-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.props-subnav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 11px; }
+.props-linetext { padding: 8px 10px; background: var(--raised); border: 1px solid var(--line); border-radius: var(--r); font-size: 13px; line-height: 1.4; color: var(--text); word-break: break-all; min-height: 36px; }
+.props-sec { margin-bottom: 16px; border-bottom: 1px solid var(--line); padding-bottom: 14px; }
+.props-sec:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+.props-sec h3 { font-size: 12px; margin: 0 0 8px; color: var(--muted); letter-spacing: 0.04em; }
+details.props-details { border: 1px solid var(--line); border-radius: var(--r); background: var(--raised); margin-bottom: 16px; overflow: hidden; }
+details.props-details summary { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; cursor: pointer; list-style: none; font-size: 12px; font-weight: 600; color: var(--text); user-select: none; }
+details.props-details summary::-webkit-details-marker { display: none; }
+details.props-details summary::before { content: '▸'; color: var(--muted); margin-right: 8px; transition: transform .15s; }
+details.props-details[open] summary::before { transform: rotate(90deg); }
+details.props-details .props-details-body { padding: 10px 12px 14px; border-top: 1px solid var(--line); background: var(--panel); }
+.pivot-selector { margin-top: 6px; }
+.pivot-selector .field-title { font-size: 11px; color: var(--muted); margin-bottom: 4px; display: block; }
+.pivot-row { display: flex; align-items: center; gap: 8px; }
+.pivot-grid { display: grid; grid-template-columns: repeat(3, 24px); grid-template-rows: repeat(3, 22px); gap: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 2px; flex: none; }
+.pivot-grid button { padding: 0; font-size: 11px; line-height: 1; border: 1px solid transparent; border-radius: 2px; background: transparent; color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.pivot-grid button:hover { background: var(--raised); color: var(--text); }
+.pivot-grid button.active { background: var(--amber); color: #120c00; font-weight: bold; border-color: var(--amber); }
 .style-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .stile { display: flex; flex-direction: column; gap: 5px; padding: 0; border: 1px solid var(--line); background: transparent; border-radius: var(--r); overflow: hidden; text-align: left; }
 .stile canvas { width: 100%; aspect-ratio: 16 / 9; display: block; }

@@ -10,6 +10,7 @@ const HUD_CHARS = '0123456789:./-_()【】・No.LYRICRECUNTITLEDXYlinebpminterlu
 const ICON = {
   dice: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="12" height="12" rx="2"/><circle cx="5.5" cy="5.5" r="1" fill="currentColor"/><circle cx="10.5" cy="10.5" r="1" fill="currentColor"/><circle cx="10.5" cy="5.5" r="1" fill="currentColor"/><circle cx="5.5" cy="10.5" r="1" fill="currentColor"/></svg>',
   lock: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg>',
+  image: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="12" height="12" rx="2"/><circle cx="5.5" cy="5.5" r="1.5" fill="currentColor"/><path d="M14 11l-3.5-3.5-5 5-2-2L2 12"/></svg>',
 };
 
 const S = { project: null, plan: null, audio: null, renderer: new J.Renderer(), playing: false, t: 0, t0: 0, loop: true, need: true, exporting: null, tap: null, slow: false, lineEls: [], curLine: -2 };
@@ -45,6 +46,164 @@ function initVolume() {
   mb.addEventListener('click', () => { AP.setVol(null, !AP.muted); show(); save(); });
 }
 
+/* ---------------- background media (images & videos) ---------------- */
+J.bgImageElement = null;
+J.loadBgMediaFile = (file) => {
+  return new Promise((resolve, reject) => {
+    const isVideo = (file.type && file.type.startsWith('video/')) || /\.(mp4|webm|m4v|mov)$/i.test(file.name);
+    if (isVideo) {
+      if (file.size > 80 * 1024 * 1024) {
+        return reject(new Error('動画ファイルのサイズが大きすぎます（80MB以下を推奨）'));
+      }
+      const reader = new FileReader();
+      reader.onerror = reject;
+      reader.onload = () => {
+        const dataUrl = reader.result;
+        const vid = document.createElement('video');
+        vid.muted = true;
+        vid.playsInline = true;
+        vid.loop = true;
+        vid.preload = 'auto';
+        vid.onerror = () => reject(new Error('動画をデコードできませんでした'));
+        vid.onloadedmetadata = () => {
+          J.bgVideoCache.set(dataUrl, vid);
+          resolve({ data: dataUrl, name: file.name, isVideo: true, img: vid });
+        };
+        vid.src = dataUrl;
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        let dw = img.naturalWidth, dh = img.naturalHeight;
+        const maxSide = 2560;
+        if (dw > maxSide || dh > maxSide) {
+          if (dw > dh) { dh = Math.round(dh * (maxSide / dw)); dw = maxSide; }
+          else { dw = Math.round(dw * (maxSide / dh)); dw = maxSide; }
+          const cv = document.createElement('canvas');
+          cv.width = dw; cv.height = dh;
+          const cx = cv.getContext('2d');
+          cx.drawImage(img, 0, 0, dw, dh);
+          const dataUrl = cv.toDataURL('image/jpeg', 0.88);
+          const optImg = new Image();
+          optImg.onload = () => {
+            J.bgImageCache.set(dataUrl, optImg);
+            resolve({ data: dataUrl, name: file.name, isVideo: false, img: optImg });
+          };
+          optImg.src = dataUrl;
+        } else {
+          J.bgImageCache.set(reader.result, img);
+          resolve({ data: reader.result, name: file.name, isVideo: false, img });
+        }
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+};
+J.loadBgImageFile = J.loadBgMediaFile;
+
+/* ---------------- IndexedDB storage for large assets ---------------- */
+const DB_NAME = 'jizura_db';
+const DB_STORE = 'projects';
+const DB_KEY = 'current';
+
+function openDb() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) return reject(new Error('IndexedDB not supported'));
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbSave(project) {
+  try {
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(DB_STORE, 'readwrite');
+      tx.objectStore(DB_STORE).put(project, DB_KEY);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {
+    return false;
+  }
+}
+
+async function idbLoad() {
+  try {
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(DB_STORE, 'readonly');
+      const req = tx.objectStore(DB_STORE).get(DB_KEY);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch (e) {
+    return null;
+  }
+}
+
+function preloadProjectImages(p) {
+  if (!p) return;
+  const loadMedia = (item) => {
+    if (!item || !item.data) return null;
+    if (J.isMediaVideo(item)) {
+      let vid = J.bgVideoCache.get(item.data);
+      if (!vid) {
+        vid = document.createElement('video');
+        vid.muted = true;
+        vid.playsInline = true;
+        vid.loop = true;
+        vid.preload = 'auto';
+        vid.onloadedmetadata = () => { S.need = true; };
+        vid.addEventListener('seeked', () => { if (!S.playing) S.need = true; });
+        vid.src = item.data;
+        J.bgVideoCache.set(item.data, vid);
+      }
+      return vid;
+    } else {
+      let img = J.bgImageCache.get(item.data);
+      if (!img) {
+        img = new Image();
+        img.onload = () => { S.need = true; };
+        img.src = item.data;
+        J.bgImageCache.set(item.data, img);
+      } else if (!img.complete) {
+        img.onload = () => { S.need = true; };
+      }
+      return img;
+    }
+  };
+
+  // 1. ベース背景メディア
+  if (p.bgImage && p.bgImage.data) {
+    J.bgImageElement = loadMedia(p.bgImage);
+  } else {
+    J.bgImageElement = null;
+  }
+  // 2. 行ごとの背景メディア
+  if (p.overrides) {
+    for (const k of Object.keys(p.overrides)) {
+      const ov = p.overrides[k];
+      if (ov && ov.bgImage && ov.bgImage.data) {
+        loadMedia(ov.bgImage);
+      }
+    }
+  }
+}
+
 /* ---------------- project persistence ---------------- */
 function mergeProject(p) {
   const d = J.defaultProject();
@@ -59,15 +218,48 @@ function mergeProject(p) {
   o.fonts = (p && p.fonts) || {};
   o.userFonts = (p && p.userFonts) || [];
   for (const uf of o.userFonts) if (!J.FONTS[uf.key]) J.addUserFont(uf.key, uf.label, uf.family, uf.weight || 400);
+  if (p && p.bgImage) {
+    o.bgImage = Object.assign({ enabled: true, fit: 'cover', anchor: 'center', opacity: 1, dim: 0.25, blur: 0, effects: false, zoom: 'none', slide: 'none', fade: 'none', blurMode: 'none' }, p.bgImage);
+  } else {
+    o.bgImage = null;
+  }
+  preloadProjectImages(o);
   return o;
 }
 function setBadges(d) {
   return (d && d.extra ? '<span class="set-badge ex" title="最初の公開版のあとに追加">追加</span>' : '') + (d && d.wa ? '<span class="set-badge" title="和風の演出">和</span>' : '');
 }
+function stripImages(proj) {
+  try {
+    const cp = JSON.parse(JSON.stringify(proj));
+    if (cp.bgImage && cp.bgImage.data) delete cp.bgImage.data;
+    if (cp.overrides) {
+      for (const k of Object.keys(cp.overrides)) {
+        if (cp.overrides[k] && cp.overrides[k].bgImage && cp.overrides[k].bgImage.data) {
+          delete cp.overrides[k].bgImage.data;
+        }
+      }
+    }
+    return cp;
+  } catch (e) {
+    return proj;
+  }
+}
 function loadLocal() { try { const s = localStorage.getItem(LS_KEY); if (s) return mergeProject(JSON.parse(s)); } catch (e) {} return mergeProject(null); }
 let saveTimer = 0;
 function autosave() { clearTimeout(saveTimer); saveTimer = setTimeout(flushSave, 700); }
-function flushSave() { clearTimeout(saveTimer); try { localStorage.setItem(LS_KEY, JSON.stringify(S.project)); } catch (e) {} }
+function flushSave() {
+  clearTimeout(saveTimer);
+  if (!S.project) return;
+  idbSave(S.project);
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(S.project));
+  } catch (e) {
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(stripImages(S.project)));
+    } catch (e2) {}
+  }
+}
 window.addEventListener('pagehide', () => { if (S.project) flushSave(); });
 
 /* ---------------- planning ---------------- */
@@ -93,7 +285,7 @@ function replan() {
   langNote();
   if (S.t > S.plan.duration) S.t = 0;
   renderLines(); sizeViewport(); drawTimeline(); updateTimeUI();
-  S.need = true; autosave(); ensureFonts(); drawSwatch(); showNow();
+  S.need = true; autosave(); ensureFonts(); drawSwatch(); showNow(); updatePropsPanel(true);
   clearTimeout(warmTimer); warmTimer = setTimeout(warm, 450);
 }
 /* pre-decompose glyphs used by piece animations while the editor is idle, so playback does not hitch */
@@ -173,6 +365,7 @@ function tick(now) {
     }
     S.t = t; S.need = true;
   }
+  if (J.syncBgVideos) J.syncBgVideos(S.plan, S.t, S.playing);
   if (S.need) { S.need = false; draw(); }
 }
 function updateTimeUI() {
@@ -187,12 +380,14 @@ function play() {
 }
 function pause() {
   S.playing = false; AP.stop();
+  if (J.syncBgVideos) J.syncBgVideos(S.plan, S.t, false);
   $('btnPlay').textContent = '▶'; $('btnPlay').setAttribute('aria-label', '再生'); S.need = true;
 }
 function seek(t) {
   S.t = J.clamp(t, 0, Math.max(0, S.plan.duration - 1e-3));
   if (S.audio) { if (S.playing) AP.play(S.audio.buffer, S.t); }
   else S.t0 = performance.now() - S.t * 1000;
+  if (J.syncBgVideos) J.syncBgVideos(S.plan, S.t, S.playing);
   S.need = true;
 }
 
@@ -238,15 +433,296 @@ function timelineSeek(ev) {
   seek((ev.clientX - r.left) / r.width * S.plan.duration);
 }
 
+/* ---------------- properties tab (selected line) ---------------- */
+function initPropsSelects() {
+  const populate = (id, group) => {
+    const sel = $(id); if (!sel) return;
+    const tbl = J.registry(group);
+    const items = techItems(group);
+    sel.innerHTML = '<option value="">自動</option>' + items.map(k => `<option value="${k}">${escapeHtml(tbl[k].name)}</option>`).join('');
+  };
+  populate('pLayout', 'layout');
+  populate('pEnter', 'enter');
+  populate('pHold', 'hold');
+  populate('pExit', 'exit');
+  populate('pTreat', 'treat');
+  populate('pCam', 'cam');
+  populate('pBg', 'bg');
+  populate('pTrans', 'trans');
+}
+
+function updatePropsPanel(force = false) {
+  const pane = document.querySelector('.tabpane[data-pane="props"]');
+  if (pane && pane.hidden && !force) return;
+  if (!S.plan) return;
+
+  const cut = J.cutAt(S.plan, S.t);
+  let li = S.curLine;
+  if (li < 0 && cut && cut.line >= 0) li = cut.line;
+  if (li < 0 && S.plan.lines.length) li = 0;
+
+  const emptyEl = $('propsEmpty'), contentEl = $('propsContent');
+  if (!emptyEl || !contentEl) return;
+
+  if (li < 0 || !S.plan.lines[li]) {
+    emptyEl.hidden = false;
+    contentEl.hidden = true;
+    const p = emptyEl.querySelector('p');
+    if (cut && cut.layout === 'title') {
+      p.textContent = 'タイトルカードを表示中（タイトル・アーティストは「歌詞」タブ上部で編集できます）';
+    } else if (cut && cut.layout === 'interlude') {
+      p.textContent = '曲の合間（インタールード）を表示中';
+    } else {
+      p.innerHTML = '再生中・選択中の行がありません。<br>タイムラインをクリックするか、左の行リストから選択してください。';
+    }
+    return;
+  }
+
+  emptyEl.hidden = true;
+  contentEl.hidden = false;
+
+  const ln = S.plan.lines[li];
+  const ov = (S.project.overrides && S.project.overrides[li]) || {};
+  const total = S.plan.lines.length;
+
+  $('pLineLabel').textContent = `行 ${li + 1} / ${total}`;
+  $('pLineTime').textContent = `${J.fmtTime(ln.start)} - ${J.fmtTime(ln.end)} (${(ln.end - ln.start).toFixed(2)}s)`;
+  $('pPropPrev').disabled = li <= 0;
+  $('pPropNext').disabled = li >= total - 1;
+  $('pLineText').textContent = ln.text;
+  $('pPropLock').textContent = ov.lock ? '🔒 固定中 (解除)' : '🔒 固定する';
+  $('pPropLock').setAttribute('aria-pressed', String(!!ov.lock));
+  $('pPropSingle').checked = !!ov.single;
+
+  // カット情報
+  if (cut && cut.line === li) {
+    const lineCuts = S.plan.cuts.filter(c => c.line === li);
+    const cutPosInLine = lineCuts.indexOf(cut) + 1;
+    $('pCutBadge').textContent = `#${String(cut.index + 1).padStart(2, '0')} (${cutPosInLine}/${lineCuts.length})`;
+    const chip = (cls, k, v) => `<span class="chip ${cls}"><b>${k}</b>${v}</span>`;
+    const n = (tbl, k) => (tbl[k] ? tbl[k].name : k);
+    $('pCutChips').innerHTML = [
+      chip('l', 'レイアウト', n(J.LAYOUTS, cut.layout)),
+      chip('e', '登場', n(J.ENTER, cut.enter)),
+      chip('h', '保持', n(J.HOLD, cut.hold)),
+      chip('x', '退場', n(J.EXIT, cut.exit)),
+      cut.decor && cut.decor.length ? chip('', '装飾', cut.decor.map(d => n(J.DECOR, d.id)).join('・')) : '',
+      cut.treat && cut.treat !== 'none' ? chip('t', '加工', n(J.TREAT, cut.treat)) : '',
+      cut.bg && cut.bg !== 'none' ? chip('b', '背景', n(J.BG, cut.bg)) : '',
+      cut.cam && cut.cam !== 'push' ? chip('c', 'カメラ', n(J.CAMERA, cut.cam)) : '',
+      cut.trans ? chip('c', 'つなぎ', n(J.TRANS, cut.trans)) : '',
+    ].join('');
+  } else {
+    $('pCutBadge').textContent = '—';
+    $('pCutChips').innerHTML = '<span class="hint">この行の先頭へジャンプするとカット情報が表示されます</span>';
+  }
+
+  // 演出指定セレクト（フォーカス中の入力欄は上書きしない）
+  const activeEl = document.activeElement;
+  const updateSelect = (id, val) => {
+    const el = $(id);
+    if (el && el !== activeEl) el.value = val || '';
+  };
+  updateSelect('pLayout', ov.layout);
+  updateSelect('pEnter', ov.enter);
+  updateSelect('pHold', ov.hold);
+  updateSelect('pExit', ov.exit);
+  updateSelect('pTreat', ov.treat);
+  updateSelect('pCam', ov.cam);
+  updateSelect('pBg', ov.bg);
+  updateSelect('pTrans', ov.trans);
+
+  // 演出指定のバッジ表示
+  const TECH_KEYS = ['layout', 'enter', 'hold', 'exit', 'treat', 'cam', 'bg', 'trans'];
+  const overriddenCount = TECH_KEYS.filter(k => !!ov[k]).length;
+  const badgeEl = $('pTechBadge');
+  if (badgeEl) {
+    if (overriddenCount > 0) {
+      badgeEl.textContent = `${overriddenCount}項目指定中`;
+      badgeEl.className = 'chip mono l';
+    } else {
+      badgeEl.textContent = '自動';
+      badgeEl.className = 'chip mono';
+    }
+  }
+
+  // 背景メディア (画像 / 動画)
+  const curLnBg = ov.bgImage || {};
+  const hasBg = !!curLnBg.data;
+  const isVid = hasBg && (curLnBg.isVideo || J.isMediaVideo(curLnBg));
+  $('pBgStatus').textContent = hasBg ? ((isVid ? '🎬 ' : '📷 ') + (curLnBg.name || (isVid ? '動画設定中' : '画像設定中'))) : '未設定';
+  $('pBgStatus').className = 'chip ' + (hasBg ? 'l' : 'muted');
+  $('pBgDel').hidden = !hasBg;
+  $('pBgSettings').hidden = !hasBg;
+  if (hasBg) {
+    $('pBgEnabled').checked = curLnBg.enabled !== false;
+    if ($('pBgFit') !== activeEl) $('pBgFit').value = curLnBg.fit || 'cover';
+    if ($('pBgAnchor') !== activeEl) $('pBgAnchor').value = curLnBg.anchor || 'center';
+    syncPivotGrid('pBgAnchor', curLnBg.anchor || 'center');
+    if ($('pBgOpacity') !== activeEl) $('pBgOpacity').value = Math.round((curLnBg.opacity != null ? curLnBg.opacity : 1) * 100);
+    if ($('pBgDim') !== activeEl) $('pBgDim').value = Math.round((curLnBg.dim != null ? curLnBg.dim : 0.25) * 100);
+    if ($('pBgBlur') !== activeEl) $('pBgBlur').value = curLnBg.blur || 0;
+    if ($('pBgZoom') !== activeEl) $('pBgZoom').value = curLnBg.zoom || 'none';
+    if ($('pBgSlide') !== activeEl) $('pBgSlide').value = curLnBg.slide || 'none';
+    if ($('pBgFade') !== activeEl) $('pBgFade').value = curLnBg.fade || 'none';
+    if ($('pBgBlurMode') !== activeEl) $('pBgBlurMode').value = curLnBg.blurMode || 'none';
+    $('pBgEffects').checked = !!curLnBg.effects;
+  }
+}
+
+function bindPropsPanel() {
+  const getLi = () => (S.curLine >= 0 ? S.curLine : (S.plan && S.plan.lines.length ? 0 : -1));
+  const changeOv = (patch) => {
+    const li = getLi(); if (li < 0) return;
+    remember();
+    setOv(li, patch);
+    replan();
+    commit();
+    flushSave();
+    updatePropsPanel(true);
+  };
+
+  $('pPropPrev').addEventListener('click', () => {
+    const li = getLi();
+    if (li > 0 && S.plan.lines[li - 1]) {
+      seek(S.plan.lines[li - 1].start + 0.001);
+      updatePropsPanel(true);
+    }
+  });
+  $('pPropNext').addEventListener('click', () => {
+    const li = getLi();
+    if (li >= 0 && li < S.plan.lines.length - 1 && S.plan.lines[li + 1]) {
+      seek(S.plan.lines[li + 1].start + 0.001);
+      updatePropsPanel(true);
+    }
+  });
+  $('pPropSeek').addEventListener('click', () => {
+    const li = getLi();
+    if (li >= 0 && S.plan.lines[li]) {
+      seek(S.plan.lines[li].start + 0.001);
+      updatePropsPanel(true);
+    }
+  });
+  $('pPropDice').addEventListener('click', () => {
+    const li = getLi(); if (li < 0) return;
+    const cur = S.project.overrides[li] || {};
+    setOv(li, { seed: (cur.seed | 0) + 1, lock: false });
+    replan(); seek(S.plan.lines[li].start + 0.001);
+  });
+  $('pPropLock').addEventListener('click', () => {
+    const li = getLi(); if (li < 0) return;
+    const cur = S.project.overrides[li] || {};
+    if (cur.lock) setOv(li, { lock: false, lockedSeed: undefined });
+    else setOv(li, { lock: true, lockedSeed: S.plan.lines[li].seed });
+    replan(); updatePropsPanel(true);
+  });
+  $('pPropSingle').addEventListener('change', e => {
+    changeOv({ single: e.target.checked || undefined });
+  });
+
+  ['pLayout', 'pEnter', 'pHold', 'pExit', 'pTreat', 'pCam', 'pBg', 'pTrans'].forEach(id => {
+    const key = id.replace(/^p/, '').toLowerCase();
+    $(id).addEventListener('change', e => {
+      changeOv({ [key]: e.target.value || undefined });
+    });
+  });
+
+  const pTechResetBtn = $('pTechReset');
+  if (pTechResetBtn) {
+    pTechResetBtn.addEventListener('click', () => {
+      const li = getLi(); if (li < 0) return;
+      remember();
+      const curOv = Object.assign({}, S.project.overrides[li] || {});
+      ['layout', 'enter', 'hold', 'exit', 'treat', 'cam', 'bg', 'trans'].forEach(k => delete curOv[k]);
+      if (Object.keys(curOv).length) S.project.overrides[li] = curOv; else delete S.project.overrides[li];
+      replan(); commit(); flushSave();
+      updatePropsPanel(true);
+      toast(`${li + 1}行目の演出指定をリセットしました`);
+    });
+  }
+
+  const updateLnBg = (patch) => {
+    const li = getLi(); if (li < 0) return;
+    remember();
+    const curOv = S.project.overrides[li] || {};
+    const curBg = curOv.bgImage || {};
+    setOv(li, { bgImage: Object.assign({ fit: 'cover', anchor: 'center', opacity: 1, dim: 0.25, blur: 0, effects: false }, curBg, patch) });
+    replan(); commit(); flushSave();
+    updatePropsPanel(true);
+  };
+
+  $('pBgFile').addEventListener('change', async e => {
+    const f = e.target.files && e.target.files[0]; if (!f) return;
+    const li = getLi(); if (li < 0) return;
+    try {
+      const res = await J.loadBgMediaFile(f);
+      remember();
+      const curOv = S.project.overrides[li] || {};
+      const curBg = curOv.bgImage || {};
+      setOv(li, {
+        bgImage: Object.assign({}, curBg, {
+          data: res.data,
+          name: res.name,
+          isVideo: !!res.isVideo,
+          enabled: true,
+          fit: curBg.fit || 'cover',
+          anchor: curBg.anchor || ($('pBgAnchor') && $('pBgAnchor').value) || 'center',
+          opacity: curBg.opacity != null ? curBg.opacity : 1,
+          dim: curBg.dim != null ? curBg.dim : 0.25,
+          blur: curBg.blur || 0,
+          effects: $('pBgEffects').checked,
+          zoom: $('pBgZoom').value,
+          slide: $('pBgSlide').value,
+          fade: $('pBgFade').value,
+          blurMode: $('pBgBlurMode').value,
+        })
+      });
+      replan(); commit(); flushSave();
+      updatePropsPanel(true);
+      toast(`${li + 1}行目に背景${res.isVideo ? '動画' : '画像'}を設定しました`);
+    } catch (err) {
+      toast(err && err.message ? err.message : 'メディアを読み込めませんでした');
+    }
+  });
+
+  $('pBgDel').addEventListener('click', () => {
+    const li = getLi(); if (li < 0) return;
+    remember();
+    setOv(li, { bgImage: undefined });
+    replan(); commit(); flushSave();
+    updatePropsPanel(true);
+    toast(`${li + 1}行目の背景を解除しました`);
+  });
+
+  $('pBgEnabled').addEventListener('change', e => updateLnBg({ enabled: e.target.checked }));
+  $('pBgFit').addEventListener('change', e => updateLnBg({ fit: e.target.value }));
+  $('pBgAnchor').addEventListener('change', e => { updateLnBg({ anchor: e.target.value }); syncPivotGrid('pBgAnchor', e.target.value); });
+  $('pBgOpacity').addEventListener('input', e => updateLnBg({ opacity: +e.target.value / 100 }));
+  $('pBgDim').addEventListener('input', e => updateLnBg({ dim: +e.target.value / 100 }));
+  $('pBgBlur').addEventListener('input', e => updateLnBg({ blur: +e.target.value }));
+  $('pBgZoom').addEventListener('change', e => updateLnBg({ zoom: e.target.value }));
+  $('pBgSlide').addEventListener('change', e => updateLnBg({ slide: e.target.value }));
+  $('pBgFade').addEventListener('change', e => updateLnBg({ fade: e.target.value }));
+  $('pBgBlurMode').addEventListener('change', e => updateLnBg({ blurMode: e.target.value }));
+  $('pBgEffects').addEventListener('change', e => updateLnBg({ effects: e.target.checked }));
+}
+
 /* ---------------- cut info ---------------- */
 let lastCutIdx = -2;
 function updateCutInfo() {
   const cut = J.cutAt(S.plan, S.t);
   const idx = cut ? cut.index : -1;
   const li = cut ? cut.line : -1;
-  if (li !== S.curLine) { S.lineEls.forEach((el, i) => el.classList.toggle('cur', i === li)); S.curLine = li; }
-  if (idx === lastCutIdx) return;
-  lastCutIdx = idx;
+  let lineChanged = false;
+  if (li !== S.curLine) {
+    S.lineEls.forEach((el, i) => el.classList.toggle('cur', i === li));
+    S.curLine = li;
+    lineChanged = true;
+  }
+  if (idx !== lastCutIdx || lineChanged) {
+    lastCutIdx = idx;
+    updatePropsPanel();
+  }
   const el = $('cutInfo');
   if (!cut) { el.innerHTML = '<span class="hint">この位置にカットはありません</span>'; return; }
   const chip = (cls, k, v) => `<span class="chip ${cls}"><b>${k}</b>${v}</span>`;
@@ -271,6 +747,7 @@ function renderLines() {
     const o = ov[i] || {};
     const li = document.createElement('li'); li.className = 'ln';
     const manual = S.project.timing.lineTimes && S.project.timing.lineTimes[i] != null;
+    const hasBg = !!(o.bgImage && o.bgImage.data);
     li.innerHTML = `<span class="no">${String(i + 1).padStart(2, '0')}</span>
       <input class="time mono" type="number" step="0.01" min="0" value="${ln.start.toFixed(2)}" title="開始（秒）${manual ? '・手動' : '・自動'}" aria-label="${i + 1}行目の開始秒" style="${manual ? 'border-color:var(--cyan)' : ''}">
       <span class="txt" title="${escapeHtml(ln.text)}">${escapeHtml(ln.text)}</span>
@@ -279,7 +756,73 @@ function renderLines() {
         <select aria-label="レイアウト指定">${layoutOpts}</select>
         <button class="icon ghost dice" title="この行を再抽選">${ICON.dice}</button>
         <button class="icon ghost lock" title="この行の構成をロック" aria-pressed="${o.lock ? 'true' : 'false'}">${ICON.lock}</button>
-      </span></div>`;
+        <button class="icon ghost bg-btn ${hasBg ? 'active' : ''}" title="${hasBg ? 'この行の背景設定中（クリックで編集）' : 'この行の背景・動きを設定'}" aria-pressed="${hasBg ? 'true' : 'false'}">${ICON.image}</button>
+      </span></div>
+      <div class="ln-bg-panel" hidden style="grid-column:1/-1;background:var(--raised2);border:1px solid var(--line2);border-radius:var(--r);padding:6px 8px;margin-top:2px;">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <label class="file small" style="padding:2px 8px;font-size:11px;cursor:pointer;">画像・動画を選択<input type="file" class="ln-bg-file" accept="image/*,video/mp4,video/webm,video/*,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm" style="display:none;"></label>
+          <button class="ghost small ln-bg-del" ${hasBg ? '' : 'hidden'} style="padding:2px 8px;font-size:11px;">解除</button>
+          <label class="check" style="font-size:11px;gap:4px;cursor:pointer;"><input type="checkbox" class="ln-bg-enabled" ${o.bgImage && o.bgImage.enabled === false ? '' : 'checked'}><span>表示</span></label>
+          <label class="check" style="font-size:11px;gap:4px;margin-left:auto;cursor:pointer;"><input type="checkbox" class="ln-bg-effects" ${o.bgImage && o.bgImage.effects ? 'checked' : ''}><span>演出効果</span></label>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:4px;margin-top:6px;">
+          <label style="font-size:10px;color:var(--muted);display:flex;flex-direction:column;gap:2px;">ズーム
+            <select class="ln-bg-zoom" style="padding:2px 4px;font-size:11px;">
+              <option value="none">なし</option>
+              <option value="in">ズームイン</option>
+              <option value="out">ズームアウト</option>
+              <option value="slow-in">ゆっくりイン</option>
+              <option value="slow-out">ゆっくりアウト</option>
+            </select>
+          </label>
+          <label style="font-size:10px;color:var(--muted);display:flex;flex-direction:column;gap:2px;">スライド
+            <select class="ln-bg-slide" style="padding:2px 4px;font-size:11px;">
+              <option value="none">なし</option>
+              <option value="up">上へ</option>
+              <option value="down">下へ</option>
+              <option value="left">左へ</option>
+              <option value="right">右へ</option>
+              <option value="up-left">斜め左上</option>
+              <option value="up-right">斜め右上</option>
+              <option value="down-left">斜め左下</option>
+              <option value="down-right">斜め右下</option>
+            </select>
+          </label>
+          <label style="font-size:10px;color:var(--muted);display:flex;flex-direction:column;gap:2px;">フェード
+            <select class="ln-bg-fade" style="padding:2px 4px;font-size:11px;">
+              <option value="none">なし</option>
+              <option value="in">フェードイン</option>
+              <option value="out">フェードアウト</option>
+              <option value="in-out">イン・アウト</option>
+            </select>
+          </label>
+          <label style="font-size:10px;color:var(--muted);display:flex;flex-direction:column;gap:2px;">ブラー演出
+            <select class="ln-bg-blur" style="padding:2px 4px;font-size:11px;">
+              <option value="none">なし</option>
+              <option value="in">ブラーイン (合焦)</option>
+              <option value="out">ブラーアウト</option>
+              <option value="in-out">イン・アウト</option>
+            </select>
+          </label>
+          <label style="font-size:10px;color:var(--muted);display:flex;flex-direction:column;gap:2px;">基準位置
+            <select class="ln-bg-anchor" style="padding:2px 4px;font-size:11px;">
+              <option value="center">中央</option>
+              <option value="top">上</option>
+              <option value="bottom">下</option>
+              <option value="left">左</option>
+              <option value="right">右</option>
+              <option value="top-left">左上</option>
+              <option value="top-right">右上</option>
+              <option value="bottom-left">左下</option>
+              <option value="bottom-right">右下</option>
+            </select>
+          </label>
+        </div>
+        ${hasBg ? (() => {
+            const isVid = o.bgImage && (o.bgImage.isVideo || J.isMediaVideo(o.bgImage));
+            return `<div style="font-size:11px;color:var(--amber);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${isVid ? '🎬' : '📷'} ${escapeHtml(o.bgImage.name || (isVid ? '背景動画設定中' : '背景画像設定中'))}</div>`;
+          })() : ''}
+      </div>`;
     li.querySelector('select').value = o.layout || '';
     li.querySelector('.time').addEventListener('change', e => {
       const v = parseFloat(e.target.value);
@@ -287,7 +830,7 @@ function renderLines() {
       if (isFinite(v)) S.project.timing.lineTimes[i] = Math.max(0, v); else delete S.project.timing.lineTimes[i];
       replan();
     });
-    li.querySelector('.txt').addEventListener('click', () => seek(ln.start + 0.001));
+    li.querySelector('.txt').addEventListener('click', () => { seek(ln.start + 0.001); updatePropsPanel(true); });
     li.querySelector('select').addEventListener('change', e => { setOv(i, { layout: e.target.value || undefined }); replan(); });
     li.querySelector('.dice').addEventListener('click', () => { const cur = ov[i] || {}; setOv(i, { seed: (cur.seed | 0) + 1, lock: false }); replan(); seek(ln.start + 0.001); });
     li.querySelector('.lock').addEventListener('click', () => {
@@ -295,6 +838,79 @@ function renderLines() {
       if (cur.lock) setOv(i, { lock: false, lockedSeed: undefined });
       else setOv(i, { lock: true, lockedSeed: ln.seed });
       replan();
+    });
+    const bgBtn = li.querySelector('.bg-btn');
+    const bgPanel = li.querySelector('.ln-bg-panel');
+    bgBtn.addEventListener('click', () => {
+      bgPanel.hidden = !bgPanel.hidden;
+      seek(ln.start + 0.001);
+    });
+    const curLnBg = o.bgImage || {};
+    li.querySelector('.ln-bg-zoom').value = curLnBg.zoom || 'none';
+    li.querySelector('.ln-bg-slide').value = curLnBg.slide || 'none';
+    li.querySelector('.ln-bg-fade').value = curLnBg.fade || 'none';
+    li.querySelector('.ln-bg-blur').value = curLnBg.blurMode || 'none';
+    li.querySelector('.ln-bg-anchor').value = curLnBg.anchor || 'center';
+
+    const updateLnMotion = (key, val) => {
+      remember();
+      const curOv = S.project.overrides[i] || {};
+      const bg = Object.assign({ fit: 'cover', anchor: 'center', opacity: 1, dim: 0.25, blur: 0, effects: false }, curOv.bgImage || {});
+      bg[key] = val;
+      setOv(i, { bgImage: bg });
+      replan(); commit(); flushSave();
+    };
+    li.querySelector('.ln-bg-zoom').addEventListener('change', e => updateLnMotion('zoom', e.target.value));
+    li.querySelector('.ln-bg-slide').addEventListener('change', e => updateLnMotion('slide', e.target.value));
+    li.querySelector('.ln-bg-fade').addEventListener('change', e => updateLnMotion('fade', e.target.value));
+    li.querySelector('.ln-bg-blur').addEventListener('change', e => updateLnMotion('blurMode', e.target.value));
+    li.querySelector('.ln-bg-anchor').addEventListener('change', e => updateLnMotion('anchor', e.target.value));
+    li.querySelector('.ln-bg-enabled').addEventListener('change', e => updateLnMotion('enabled', e.target.checked));
+
+    const bgFileInput = li.querySelector('.ln-bg-file');
+    bgFileInput.addEventListener('change', async e => {
+      const f = e.target.files && e.target.files[0]; if (!f) return;
+      try {
+        const res = await J.loadBgMediaFile(f);
+        remember();
+        const effectsOn = li.querySelector('.ln-bg-effects').checked;
+        const curOv = S.project.overrides[i] || {};
+        const curBg = curOv.bgImage || {};
+        setOv(i, {
+          bgImage: Object.assign({}, curBg, {
+            data: res.data,
+            name: res.name,
+            isVideo: !!res.isVideo,
+            fit: curBg.fit || 'cover',
+            anchor: curBg.anchor || li.querySelector('.ln-bg-anchor').value || 'center',
+            opacity: curBg.opacity != null ? curBg.opacity : 1,
+            dim: curBg.dim != null ? curBg.dim : 0.25,
+            blur: curBg.blur || 0,
+            effects: effectsOn,
+            zoom: li.querySelector('.ln-bg-zoom').value,
+            slide: li.querySelector('.ln-bg-slide').value,
+            fade: li.querySelector('.ln-bg-fade').value,
+            blurMode: li.querySelector('.ln-bg-blur').value,
+          })
+        });
+        replan(); commit(); flushSave();
+        toast(`${i + 1}行目に背景${res.isVideo ? '動画' : '画像'}を設定しました`);
+      } catch (err) {
+        toast(err && err.message ? err.message : 'メディアを読み込めませんでした');
+      }
+    });
+    li.querySelector('.ln-bg-del').addEventListener('click', () => {
+      remember();
+      setOv(i, { bgImage: undefined });
+      replan(); commit(); flushSave();
+      toast(`${i + 1}行目の背景を解除しました`);
+    });
+    li.querySelector('.ln-bg-effects').addEventListener('change', e => {
+      const curOv = S.project.overrides[i] || {};
+      if (curOv.bgImage) {
+        curOv.bgImage.effects = e.target.checked;
+        replan(); flushSave();
+      }
     });
     const cutsEl = li.querySelector('.cuts');
     S.plan.cuts.filter(c => c.line === i && J.LAYOUTS[c.layout] && !J.LAYOUTS[c.layout].special).forEach(c => {
@@ -403,7 +1019,7 @@ function randomPalette() {
 
 /* ---------------- history of looks (◀ ▶) ---------------- */
 // only the "look" is tracked — lyrics, timing and output settings are never rolled back
-const HKEYS = ['style', 'mood', 'seed', 'fx', 'enabled', 'fonts', 'colors', 'overrides'];
+const HKEYS = ['style', 'mood', 'seed', 'fx', 'enabled', 'fonts', 'colors', 'overrides', 'bgImage'];
 const H = { list: [], i: -1 };
 const lookSnap = () => JSON.stringify(Object.fromEntries(HKEYS.map(k => [k, S.project[k] ?? null])));
 function remember() {            // call before changing the look: makes sure the current look is on the stack
@@ -423,6 +1039,7 @@ function histGo(d) {
   const j = H.i + d; if (j < 0 || j >= H.list.length) return;
   H.i = j;
   Object.assign(S.project, JSON.parse(H.list[j]));
+  preloadProjectImages(S.project);
   fontKey = ''; syncUI(); replan(); updateHist();
   toast(`${j + 1} / ${H.list.length} 案目`);
   restartPreview();
@@ -643,6 +1260,55 @@ function tapNow() {
 function stopTap() { S.tap = null; $('tapPanel').hidden = true; $('btnTap').setAttribute('aria-pressed', 'false'); replan(); }
 function updateTap() { const ln = S.plan.lines[S.tap.i]; $('tapLine').textContent = ln ? `${S.tap.i + 1}. ${ln.text}` : '—'; }
 
+function syncPivotGrid(targetId, val) {
+  const v = val || 'center';
+  document.querySelectorAll(`.pivot-grid[data-target="${targetId}"] button`).forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.val === v);
+  });
+}
+
+function bindPivotGrids() {
+  document.querySelectorAll('.pivot-grid button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const grid = btn.closest('.pivot-grid');
+      const targetId = grid && grid.dataset.target;
+      const val = btn.dataset.val;
+      const sel = $(targetId);
+      if (sel) {
+        sel.value = val;
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      syncPivotGrid(targetId, val);
+    });
+  });
+}
+
+function syncBgImageUI() {
+  const b = S.project.bgImage;
+  const ctrls = $('bgImageControls'), rmBtn = $('btnRemoveBgImage'), fi = $('bgImageFile');
+  if (!ctrls || !rmBtn) return;
+  if (b && (b.data || J.bgImageElement)) {
+    ctrls.hidden = false;
+    rmBtn.hidden = false;
+    $('bgImageEnabled').checked = b.enabled !== false;
+    $('bgImageFit').value = b.fit || 'cover';
+    $('bgImageAnchor').value = b.anchor || 'center';
+    syncPivotGrid('bgImageAnchor', b.anchor || 'center');
+    $('bgImageOpacity').value = Math.round((b.opacity != null ? b.opacity : 1) * 100);
+    $('bgImageDim').value = Math.round((b.dim != null ? b.dim : 0.25) * 100);
+    $('bgImageBlur').value = b.blur || 0;
+    $('bgImageEffects').checked = !!b.effects;
+    $('bgImageZoom').value = b.zoom || 'none';
+    $('bgImageSlide').value = b.slide || 'none';
+    $('bgImageFade').value = b.fade || 'none';
+    $('bgImageBlurMode').value = b.blurMode || 'none';
+  } else {
+    ctrls.hidden = true;
+    rmBtn.hidden = true;
+    if (fi) fi.value = '';
+  }
+}
+
 /* ---------------- sync all inputs from project ---------------- */
 function syncUI() {
   $('songTitle').value = S.project.title || ''; $('songArtist').value = S.project.artist || '';
@@ -655,7 +1321,7 @@ function syncUI() {
   document.querySelectorAll('.wa-toggle').forEach(el => { el.checked = S.project.wa !== false; });
   document.querySelectorAll('.extra-toggle').forEach(el => { el.checked = S.project.extra === true; });
   $('lyricLang').value = J.LANG_LABEL[S.project.lang] ? S.project.lang : 'auto'; langNote();
-  renderFontRoles(); renderColors(); renderFx(); renderTech(); syncOut(); drawStyleGrid();
+  renderFontRoles(); renderColors(); renderFx(); renderTech(); syncOut(); drawStyleGrid(); syncBgImageUI();
 }
 
 /* ---------------- wiring ---------------- */
@@ -694,6 +1360,7 @@ function bind() {
     document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-selected', String(x === b)));
     document.querySelectorAll('.tabpane').forEach(p => { p.hidden = p.dataset.pane !== b.dataset.tab; });
     if (b.dataset.tab === 'out') codecNote();
+    if (b.dataset.tab === 'props') updatePropsPanel(true);
     loadThumbFonts();
   }));
   $('fxFlash').addEventListener('change', e => { S.project.fx.flash = e.target.checked; replan(); });
@@ -734,6 +1401,80 @@ function bind() {
     try { const key = await J.loadFontFile(f); S.project.fonts.display = key; fontKey = ''; renderFontRoles(); replan(); }
     catch (err) { showMsg('フォントを読み込めませんでした'); setTimeout(() => showMsg(null), 2500); }
   });
+  $('bgImageFile').addEventListener('change', async e => {
+    const f = e.target.files && e.target.files[0]; if (!f) return;
+    try {
+      const res = await J.loadBgMediaFile(f);
+      J.bgImageElement = res.img;
+      remember();
+      S.project.bgImage = {
+        data: res.data,
+        name: res.name,
+        isVideo: !!res.isVideo,
+        enabled: true,
+        fit: (S.project.bgImage && S.project.bgImage.fit) || 'cover',
+        anchor: (S.project.bgImage && S.project.bgImage.anchor) || ($('bgImageAnchor') && $('bgImageAnchor').value) || 'center',
+        opacity: (S.project.bgImage && S.project.bgImage.opacity != null) ? S.project.bgImage.opacity : 1,
+        dim: (S.project.bgImage && S.project.bgImage.dim != null) ? S.project.bgImage.dim : 0.25,
+        blur: (S.project.bgImage && S.project.bgImage.blur != null) ? S.project.bgImage.blur : 0,
+        effects: (S.project.bgImage && S.project.bgImage.effects != null) ? S.project.bgImage.effects : $('bgImageEffects').checked,
+        zoom: (S.project.bgImage && S.project.bgImage.zoom) || 'none',
+        slide: (S.project.bgImage && S.project.bgImage.slide) || 'none',
+        fade: (S.project.bgImage && S.project.bgImage.fade) || 'none',
+        blurMode: (S.project.bgImage && S.project.bgImage.blurMode) || 'none',
+      };
+      syncBgImageUI();
+      replan();
+      commit();
+      flushSave();
+      toast(res.isVideo ? '背景動画を適用しました' : '背景画像を適用しました');
+    } catch (err) {
+      toast(err && err.message ? err.message : 'メディアを読み込めませんでした');
+    }
+  });
+  $('btnRemoveBgImage').addEventListener('click', () => {
+    remember();
+    S.project.bgImage = null;
+    J.bgImageElement = null;
+    syncBgImageUI();
+    replan();
+    commit();
+    flushSave();
+    toast('背景を解除しました');
+  });
+  $('bgImageEnabled').addEventListener('change', e => {
+    if (S.project.bgImage) { S.project.bgImage.enabled = e.target.checked; replan(); flushSave(); }
+  });
+  $('bgImageFit').addEventListener('change', e => {
+    if (S.project.bgImage) { S.project.bgImage.fit = e.target.value; replan(); flushSave(); }
+  });
+  $('bgImageAnchor').addEventListener('change', e => {
+    if (S.project.bgImage) {
+      S.project.bgImage.anchor = e.target.value;
+      replan();
+      flushSave();
+      syncPivotGrid('bgImageAnchor', e.target.value);
+    }
+  });
+  bindPivotGrids();
+  $('bgImageOpacity').addEventListener('input', e => {
+    if (S.project.bgImage) { S.project.bgImage.opacity = +e.target.value / 100; S.need = true; autosave(); }
+  });
+  $('bgImageDim').addEventListener('input', e => {
+    if (S.project.bgImage) { S.project.bgImage.dim = +e.target.value / 100; S.need = true; autosave(); }
+  });
+  $('bgImageBlur').addEventListener('input', e => {
+    if (S.project.bgImage) { S.project.bgImage.blur = +e.target.value; S.need = true; autosave(); }
+  });
+  $('bgImageEffects').addEventListener('change', e => {
+    if (S.project.bgImage) { S.project.bgImage.effects = e.target.checked; replan(); flushSave(); }
+  });
+  ['bgImageZoom', 'bgImageSlide', 'bgImageFade', 'bgImageBlurMode'].forEach(id => {
+    const key = id === 'bgImageBlurMode' ? 'blurMode' : id.replace('bgImage', '').toLowerCase();
+    $(id).addEventListener('change', e => {
+      if (S.project.bgImage) { S.project.bgImage[key] = e.target.value; replan(); flushSave(); }
+    });
+  });
   ['outAspect', 'eAspect'].forEach(id => $(id).addEventListener('change', e => { S.project.aspect = e.target.value; syncOut(); replan(); codecNote(); }));
   ['outRes', 'eRes'].forEach(id => $(id).addEventListener('change', e => { S.project.res = +e.target.value; syncOut(); autosave(); codecNote(); }));
   ['outFps', 'eFps'].forEach(id => $(id).addEventListener('change', e => { S.project.fps = +e.target.value; syncOut(); replan(); codecNote(); }));
@@ -770,8 +1511,18 @@ function bind() {
   $('btnAE').addEventListener('click', () => J.saveFile(baseName() + '_ae.json', JSON.stringify(J.planForAE(S.plan, S.project), null, 1)));
   $('fileProject').addEventListener('change', async e => {
     const f = e.target.files && e.target.files[0]; if (!f) return;
-    try { S.project = mergeProject(JSON.parse(await f.text())); syncUI(); replan(); }
-    catch (err) { showMsg('プロジェクトを読み込めませんでした'); setTimeout(() => showMsg(null), 2500); }
+    try {
+      const data = JSON.parse(await f.text());
+      S.project = mergeProject(data);
+      syncUI();
+      replan();
+      commit();
+      flushSave();
+      toast('プロジェクトを読み込みました');
+    } catch (err) {
+      showMsg('プロジェクトを読み込めませんでした');
+      setTimeout(() => showMsg(null), 2500);
+    }
     e.target.value = '';
   });
   document.addEventListener('keydown', e => {
@@ -803,15 +1554,28 @@ async function loadAudioFile(f) {
 }
 
 /* ---------------- boot ---------------- */
-function boot() {
+async function boot() {
   S.project = loadLocal();
-  bind(); initVolume(); syncUI(); replan();
+  initPropsSelects();
+  bind();
+  bindPropsPanel();
+  initVolume();
+  syncUI();
+  replan();
   let mode = 'easy'; try { mode = localStorage.getItem('jizura.mode') || 'easy'; } catch (e) {}
   setMode(mode); commit();
   // open on a representative frame (end of the first cut's entrance)
   const c0 = S.plan.cuts.find(c => c.line >= 0);
   if (c0) seek(c0.start + Math.min(c0.dur * 0.6, c0.inDur + 0.25));
   requestAnimationFrame(tick);
+  try {
+    const idbProj = await idbLoad();
+    if (idbProj) {
+      S.project = mergeProject(idbProj);
+      syncUI();
+      replan();
+    }
+  } catch (e) {}
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 J.ui = S;
