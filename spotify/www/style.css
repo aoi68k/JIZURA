@@ -1,0 +1,27 @@
+html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color: #eee; font: 13px/1.4 system-ui, "Yu Gothic UI", sans-serif; }
+#view { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: block; }
+body.hideCursor { cursor: none; }
+/* 背景: 透明 — 通常ブラウザでは確認用の市松模様、OBS (?obs や ?hud=0) では完全透過 */
+html.clear:not(.obs), html.clear:not(.obs) body { background: #2a2a2a repeating-conic-gradient(#333 0 25%, #222 0 50%) 0 0 / 32px 32px; }
+html.clear.obs, html.clear.obs body, html.obs, html.obs body { background: transparent !important; }
+html.obs #idle { display: none !important; }
+
+#idle { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; pointer-events: none; }
+#idle .logo { font: 900 64px/1 "Noto Sans JP", system-ui, sans-serif; letter-spacing: 0.3em; color: #fff; opacity: 0.9; }
+#idle #idleMsg { opacity: 0.6; letter-spacing: 0.1em; }
+body.live #idle { display: none; }
+
+#hud { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 18px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px;
+  background: linear-gradient(to top, rgba(0,0,0,0.82), rgba(0,0,0,0)); transition: opacity 0.35s; }
+body.hudOff #hud { opacity: 0; pointer-events: none; }
+#hud .track { min-width: 0; max-width: 34vw; }
+#tTitle { font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#tArtist { opacity: 0.7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#status { flex: 1; opacity: 0.7; min-width: 120px; }
+#hud .ctrls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+#hud label { display: inline-flex; align-items: center; gap: 6px; opacity: 0.9; }
+#hud select, #hud button { font: inherit; color: #eee; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.22); border-radius: 6px; padding: 4px 9px; cursor: pointer; }
+#hud select option { background: #222; }
+#hud button:hover, #hud select:hover { background: rgba(255,255,255,0.2); }
+#hud .offset { display: inline-flex; align-items: center; gap: 4px; }
+#offVal { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; }

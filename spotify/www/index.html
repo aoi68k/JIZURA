@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JIZURA spotify-view</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="idle"><div class="logo">JIZURA</div><div id="idleMsg">Spotify を待っています</div></div>
+<div id="hud">
+  <div class="track"><div id="tTitle">—</div><div id="tArtist"></div></div>
+  <div id="status"></div>
+  <div class="ctrls">
+    <label>演出 <select id="style"></select></label>
+    <label>比率 <select id="aspect"><option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option><option value="4:3">4:3</option><option value="21:9">21:9</option></select></label>
+    <label>背景 <select id="bg"><option value="fx">演出あり</option><option value="clear">透明</option></select></label>
+    <button id="reroll" title="別の演出 (R)">別の演出</button>
+    <span class="offset">補正 <button id="offMinus" title="早める (←)">−</button><span id="offVal">0.0s</span><button id="offPlus" title="遅らせる (→)">＋</button></span>
+    <button id="reload" title="歌詞を再取得">歌詞を再取得</button>
+    <input type="file" id="fileLrc" accept=".lrc,.txt" style="display:none">
+    <button id="openLrc" title="手持ちのLRCファイルを開く（ドラッグ＆ドロップでも可）">LRC読込</button>
+    <button id="copyObs" title="OBS用URLをクリップボードにコピー">OBS用URL</button>
+    <button id="full" title="全画面 (F)">全画面</button>
+  </div>
+</div>
+<script src="jizura.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
