@@ -21,6 +21,7 @@ const S = {
   anchorPos: 0, anchorAt: 0, playing: false, rate: 1,   // playback clock: position at anchorAt (performance.now)
   plan: null, renderer: new J.Renderer(), reroll: {},
   loadGen: 0, buildGen: 0, need: true, lastT: -1, slow: false,
+  localAudio: null, localAudioName: null,               // local audio element if playing local file
 };
 
 /* ---------- deterministic randomness per song (same song → same look, until 別の演出) ---------- */
@@ -109,8 +110,12 @@ async function rebuild() {
 }
 
 /* ---------- now playing ---------- */
-function clock() { return S.anchorPos + (S.playing ? (performance.now() - S.anchorAt) / 1000 * S.rate : 0); }
+function clock() {
+  if (S.localAudio) return S.localAudio.currentTime;
+  return S.anchorPos + (S.playing ? (performance.now() - S.anchorAt) / 1000 * S.rate : 0);
+}
 async function poll() {
+  if (S.localAudio) return;                                 // local audio playback is active
   const t0 = performance.now();
   let r;
   try { r = await (await fetch('/api/now', { cache: 'no-store' })).json(); }
@@ -134,6 +139,73 @@ function goIdle(msg) {
   const c = $('view'); c.getContext('2d').clearRect(0, 0, c.width, c.height);
 }
 async function loop() { await poll(); setTimeout(loop, POLL_MS); }
+
+function stopLocalAudio() {
+  if (!S.localAudio) return;
+  try { S.localAudio.pause(); URL.revokeObjectURL(S.localAudio.src); } catch (e) {}
+  S.localAudio = null;
+  S.localAudioName = null;
+  S.manualLrc = false;
+  S.found = false; S.key = null; S.info = null; S.lyr = null;
+  setStatus('ローカル再生を終了しました。Spotify に復帰します');
+  poll();
+}
+
+function loadLocalAudio(file) {
+  if (!file) return;
+  if (S.localAudio) {
+    try { S.localAudio.pause(); URL.revokeObjectURL(S.localAudio.src); } catch (e) {}
+    S.localAudio = null;
+  }
+  const url = URL.createObjectURL(file);
+  const audio = new Audio(url);
+  S.localAudio = audio;
+  S.localAudioName = file.name;
+
+  const rawName = file.name.replace(/\.[^.]+$/, '');
+  let title = rawName, artist = 'ローカル音源';
+  if (rawName.includes(' - ')) {
+    const parts = rawName.split(' - ');
+    artist = parts[0].trim();
+    title = parts.slice(1).join(' - ').trim();
+  }
+
+  const startPlayback = () => {
+    const dur = audio.duration || 0;
+    const key = `local:${file.name}:${Math.round(dur)}`;
+    S.found = true;
+    S.key = key;
+    S.info = { title, artist, album: 'Local', duration: dur, playing: true, rate: 1, position: 0 };
+    S.playing = true;
+    S.rate = 1;
+    document.body.classList.add('live');
+    $('tTitle').textContent = title;
+    $('tArtist').textContent = artist;
+    document.title = `${title} — JIZURA spotify-view`;
+    setStatus(`ローカル楽曲再生中 · ${file.name}（Space: 再生/一時停止, Esc: 終了）`);
+    if (!S.manualLrc) {
+      loadTrack(false);
+    } else {
+      rebuild();
+    }
+    audio.play().catch(() => {});
+  };
+
+  if (audio.readyState >= 1) {
+    startPlayback();
+  } else {
+    audio.addEventListener('loadedmetadata', startPlayback, { once: true });
+  }
+
+  audio.addEventListener('play', () => { S.playing = true; S.need = true; });
+  audio.addEventListener('pause', () => { S.playing = false; S.need = true; });
+  audio.addEventListener('timeupdate', () => { S.need = true; });
+  audio.addEventListener('ended', () => {
+    S.playing = false;
+    S.need = true;
+    setStatus(`再生終了 · ${file.name}（Space: 再開）`);
+  });
+}
 
 function loadLocalLrc(text, name) {
   if (!text || !text.trim()) return;
@@ -231,6 +303,15 @@ function initControls() {
   const reroll = () => { if (!S.key) return; S.reroll[S.key] = (S.reroll[S.key] | 0) + 1; rebuild(); };
   $('reroll').addEventListener('click', reroll);
   $('reload').addEventListener('click', () => { if (S.info) loadTrack(true); });
+  const fileAudio = $('fileAudio'), openAudio = $('openAudio');
+  if (openAudio && fileAudio) {
+    openAudio.addEventListener('click', () => fileAudio.click());
+    fileAudio.addEventListener('change', e => {
+      const file = e.target.files && e.target.files[0];
+      if (file) loadLocalAudio(file);
+      fileAudio.value = '';
+    });
+  }
   const fileLrc = $('fileLrc'), openLrc = $('openLrc');
   if (openLrc && fileLrc) {
     openLrc.addEventListener('click', () => fileLrc.click());
@@ -245,7 +326,10 @@ function initControls() {
   window.addEventListener('drop', async e => {
     e.preventDefault();
     const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if (file && /\.(lrc|txt)$/i.test(file.name)) {
+    if (!file) return;
+    if (/\.(mp3|wav|m4a|aac|flac|ogg)$/i.test(file.name)) {
+      loadLocalAudio(file);
+    } else if (/\.(lrc|txt)$/i.test(file.name)) {
       try { loadLocalLrc(await file.text(), file.name); } catch (err) { setStatus('ファイルを読み込めませんでした'); }
     }
   });
@@ -267,6 +351,21 @@ function initControls() {
   }
   window.addEventListener('keydown', e => {
     if (e.target && /^(SELECT|INPUT)$/.test(e.target.tagName)) return;
+    if (e.code === 'Space' || e.key === ' ') {
+      if (S.localAudio) {
+        if (S.localAudio.paused) S.localAudio.play().catch(() => {});
+        else S.localAudio.pause();
+        e.preventDefault();
+        return;
+      }
+    }
+    if (e.key === 'Escape') {
+      if (S.localAudio) {
+        stopLocalAudio();
+        e.preventDefault();
+        return;
+      }
+    }
     if (e.key === 'f' || e.key === 'F') full();
     else if (e.key === 'r' || e.key === 'R') reroll();
     else if (e.key === 'ArrowLeft') nudge(-0.1);
